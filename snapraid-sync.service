@@ -1,0 +1,24 @@
+[Unit]
+Description=SnapRAID Sync Service
+Documentation=man:snapraid(1)
+After=local-fs.target network.target
+RequiresMountsFor=/mnt
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/snapraid-sync.sh
+
+# Security hardening
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Resource limits
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+Nice=19
+
+# Timeout (10 hours should be enough for most syncs)
+TimeoutStartSec=36000
+
+[Install]
+WantedBy=multi-user.target

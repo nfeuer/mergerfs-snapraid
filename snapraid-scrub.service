@@ -1,0 +1,27 @@
+[Unit]
+Description=SnapRAID Scrub Service
+Documentation=man:snapraid(1)
+After=local-fs.target network.target
+RequiresMountsFor=/mnt
+
+[Service]
+Type=oneshot
+# Scrub 8% of the array (complete scrub every ~12 weeks with weekly runs)
+# -p 8 = scrub 8% of blocks
+# -o 10 = scrub blocks older than 10 days
+ExecStart=/usr/bin/snapraid scrub -p 8 -o 10
+
+# Security hardening
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Resource limits (scrub is low priority)
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+Nice=19
+
+# Timeout (24 hours for scrub operations)
+TimeoutStartSec=86400
+
+[Install]
+WantedBy=multi-user.target

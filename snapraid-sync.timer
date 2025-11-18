@@ -1,0 +1,17 @@
+[Unit]
+Description=SnapRAID Sync Timer (Daily at 2 AM)
+Documentation=man:snapraid(1)
+
+[Timer]
+# Run daily at 2 AM
+OnCalendar=daily
+OnCalendar=02:00
+
+# If system was off, run 30 minutes after boot
+Persistent=true
+
+# Random delay to avoid all systems syncing at once if using shared resources
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target
