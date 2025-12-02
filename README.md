@@ -20,6 +20,55 @@ This setup provides:
 - 1-2 parity drives
 - Root access
 
+### Drive Size Requirements
+
+**Important:** Unlike traditional RAID, mergerfs + SnapRAID does NOT require same-size drives!
+
+- **Data drives:** Can be ANY size, mixed sizes work perfectly
+  - Example: 4TB + 6TB + 8TB all in the same pool
+  - You'll get full capacity of all drives combined
+
+- **Parity drives:** Must be equal to or LARGER than your largest data drive
+  - If largest data drive is 10TB, parity must be ≥10TB
+  - Can be larger than the largest data drive (extra space unused for parity)
+
+**Example setup:**
+```
+Data drives:   4TB + 6TB + 8TB = 18TB usable storage
+Parity drive:  8TB (matches largest data drive)
+With 1-parity: Protected against 1 disk failure
+With 2-parity: Protected against 2 simultaneous disk failures
+```
+
+### Preparing Drives
+
+**The setup script does NOT format drives automatically** (for safety).
+
+If you need to format drives before setup:
+
+1. **Use the included format helper script:**
+   ```bash
+   sudo ./format-disk.sh
+   ```
+   This will:
+   - Show all available disks
+   - Safely format selected disk as ext4
+   - Multiple safety confirmations
+
+2. **Or format manually:**
+   ```bash
+   # Replace sdX with your disk (e.g., sda, sdb)
+   sudo wipefs -a /dev/sdX
+   sudo parted -s /dev/sdX mklabel gpt
+   sudo parted -s /dev/sdX mkpart primary ext4 0% 100%
+   sudo mkfs.ext4 -F /dev/sdX1
+   ```
+
+**IMPORTANT:**
+- Formatting will ERASE ALL DATA on the disk
+- Make sure you select the correct disk
+- The setup script expects drives to already be formatted with ext4
+
 ### Installation
 
 1. **Clone or download this repository:**
@@ -93,7 +142,30 @@ Main setup script that:
 sudo ./setup-mergerfs-snapraid.sh [--dry-run]
 ```
 
-### 2. snapraid-sync.sh
+### 2. format-disk.sh
+
+Disk formatting helper script that:
+- Lists all available disks with details
+- Safely formats selected disk as ext4
+- Creates GPT partition table
+- Multiple safety confirmations before wiping data
+- Shows UUID after formatting
+
+**Usage:**
+```bash
+sudo ./format-disk.sh
+```
+
+**Features:**
+- Interactive disk selection
+- Checks if disk is mounted (prevents accidents)
+- Triple confirmation before erasing data
+- Works with SATA, SAS, and NVMe drives
+- Shows next steps after formatting
+
+**CAUTION:** This will PERMANENTLY ERASE ALL DATA on the selected disk!
+
+### 3. snapraid-sync.sh
 
 Automated sync script with safety features:
 - Pre-sync SMART health check
@@ -116,7 +188,7 @@ Edit the script to customize:
 - `EMAIL_TO` - Notification recipient
 - `EMAIL_FROM` - Notification sender
 
-### 3. snapraid-diff.sh
+### 4. snapraid-diff.sh
 
 Generate a detailed report of changes since last sync:
 - Shows added, removed, updated, moved, and copied files
@@ -129,7 +201,7 @@ Generate a detailed report of changes since last sync:
 sudo /usr/local/bin/snapraid-diff.sh
 ```
 
-### 4. Systemd Services & Timers
+### 5. Systemd Services & Timers
 
 **snapraid-sync.service**
 - Runs the sync script
