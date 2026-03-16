@@ -72,23 +72,12 @@ send_email() {
     fi
 }
 
-# Cleanup function
-cleanup() {
-    if [[ -f "$LOCK_FILE" ]]; then
-        rm -f "$LOCK_FILE"
-    fi
-}
-
-trap cleanup EXIT
-
-# Check for lock file
-if [[ -f "$LOCK_FILE" ]]; then
-    log_error "Another SnapRAID operation is already running (lock file exists)"
+# Acquire exclusive lock (atomic, no race condition)
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    log_error "Another SnapRAID operation is already running (could not acquire lock)"
     exit 1
 fi
-
-# Create lock file
-touch "$LOCK_FILE"
 
 # Check if SnapRAID is installed
 if [[ ! -x "$SNAPRAID_BIN" ]]; then
@@ -137,23 +126,17 @@ log_info "Running pre-sync diff analysis..."
 DIFF_OUTPUT=$($SNAPRAID_BIN diff 2>&1 || true)
 echo "$DIFF_OUTPUT" >> "$LOG_FILE"
 
-# Parse diff output
-ADDED=$(echo "$DIFF_OUTPUT" | grep -oP '(?<=equal )\d+(?= added)' || echo "0")
-REMOVED=$(echo "$DIFF_OUTPUT" | grep -oP '(?<=equal )\d+(?= removed)' || echo "0")
-UPDATED=$(echo "$DIFF_OUTPUT" | grep -oP '(?<=equal )\d+(?= updated)' || echo "0")
-MOVED=$(echo "$DIFF_OUTPUT" | grep -oP '(?<=equal )\d+(?= moved)' || echo "0")
-COPIED=$(echo "$DIFF_OUTPUT" | grep -oP '(?<=equal )\d+(?= copied)' || echo "0")
-
-# Alternative parsing if the above fails
-if [[ "$ADDED" == "0" ]] && echo "$DIFF_OUTPUT" | grep -q "added"; then
-    ADDED=$(echo "$DIFF_OUTPUT" | grep "added" | awk '{print $1}' | tail -1)
-fi
-if [[ "$REMOVED" == "0" ]] && echo "$DIFF_OUTPUT" | grep -q "removed"; then
-    REMOVED=$(echo "$DIFF_OUTPUT" | grep "removed" | awk '{print $1}' | tail -1)
-fi
-if [[ "$UPDATED" == "0" ]] && echo "$DIFF_OUTPUT" | grep -q "updated"; then
-    UPDATED=$(echo "$DIFF_OUTPUT" | grep "updated" | awk '{print $1}' | tail -1)
-fi
+# Parse diff output (each stat is on its own line, e.g. "      35 added")
+ADDED=$(echo "$DIFF_OUTPUT" | grep -oP '\d+(?= added)' | head -1 || echo "0")
+REMOVED=$(echo "$DIFF_OUTPUT" | grep -oP '\d+(?= removed)' | head -1 || echo "0")
+UPDATED=$(echo "$DIFF_OUTPUT" | grep -oP '\d+(?= updated)' | head -1 || echo "0")
+MOVED=$(echo "$DIFF_OUTPUT" | grep -oP '\d+(?= moved)' | head -1 || echo "0")
+COPIED=$(echo "$DIFF_OUTPUT" | grep -oP '\d+(?= copied)' | head -1 || echo "0")
+ADDED="${ADDED:-0}"
+REMOVED="${REMOVED:-0}"
+UPDATED="${UPDATED:-0}"
+MOVED="${MOVED:-0}"
+COPIED="${COPIED:-0}"
 
 log_info "Changes detected:"
 log_info "  Added: $ADDED files"

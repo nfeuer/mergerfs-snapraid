@@ -56,11 +56,11 @@ echo -e "${BLUE}Disk Information:${NC}"
 lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT "$DISK"
 echo ""
 
-# Check if disk is mounted
-if mount | grep -q "^$DISK"; then
-    echo -e "${RED}Error: $DISK is currently mounted!${NC}"
+# Check if disk or any of its partitions are mounted
+if mount | grep -q "^${DISK}[[:space:]p0-9]"; then
+    echo -e "${RED}Error: $DISK or one of its partitions is currently mounted!${NC}"
     echo "Please unmount all partitions first:"
-    mount | grep "^$DISK" | awk '{print "  sudo umount " $1}'
+    mount | grep "^${DISK}" | awk '{print "  sudo umount " $1}'
     exit 1
 fi
 
