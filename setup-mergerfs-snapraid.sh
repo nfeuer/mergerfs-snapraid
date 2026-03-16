@@ -66,6 +66,38 @@ log_error() {
     log "${RED}[ERROR]${NC} $@"
 }
 
+# Resolve a disk device to a partition with a filesystem.
+# If /dev/sdb has no UUID but /dev/sdb1 does, return /dev/sdb1.
+resolve_partition() {
+    local disk=$1
+    local uuid
+    uuid=$(blkid -s UUID -o value "$disk" 2>/dev/null || true)
+    if [[ -n "$uuid" ]]; then
+        echo "$disk"
+        return
+    fi
+
+    # Try first partition (handles both /dev/sdb1 and /dev/nvme0n1p1)
+    local part
+    if [[ "$disk" =~ nvme ]]; then
+        part="${disk}p1"
+    else
+        part="${disk}1"
+    fi
+
+    if [[ -b "$part" ]]; then
+        uuid=$(blkid -s UUID -o value "$part" 2>/dev/null || true)
+        if [[ -n "$uuid" ]]; then
+            log_info "Resolved $disk to partition $part"
+            echo "$part"
+            return
+        fi
+    fi
+
+    # Nothing found
+    echo "$disk"
+}
+
 # Backup existing configuration
 backup_config() {
     local file=$1
@@ -300,12 +332,14 @@ setup_fstab() {
 
     # Add data disk mounts
     for i in "${!DATA_DISKS[@]}"; do
-        local disk="${DATA_DISKS[$i]}"
+        local disk
+        disk=$(resolve_partition "${DATA_DISKS[$i]}")
         local mount="${MOUNT_POINTS[$i]}"
-        local uuid=$(blkid -s UUID -o value "$disk")
+        local uuid
+        uuid=$(blkid -s UUID -o value "$disk" 2>/dev/null || true)
 
         if [[ -z "$uuid" ]]; then
-            log_warning "No UUID found for $disk, skipping fstab entry"
+            log_warning "No UUID found for ${DATA_DISKS[$i]} (or its partitions), skipping fstab entry"
             continue
         fi
 
@@ -313,15 +347,25 @@ setup_fstab() {
     done
 
     # Add parity disk mounts
-    local parity1_uuid=$(blkid -s UUID -o value "$PARITY1_DISK")
+    local parity1_resolved
+    parity1_resolved=$(resolve_partition "$PARITY1_DISK")
+    local parity1_uuid
+    parity1_uuid=$(blkid -s UUID -o value "$parity1_resolved" 2>/dev/null || true)
     if [[ -n "$parity1_uuid" ]]; then
         fstab_entries+="UUID=$parity1_uuid $PARITY1_MOUNT ext4 defaults,nofail 0 2\n"
+    else
+        log_warning "No UUID found for $PARITY1_DISK (or its partitions), skipping fstab entry"
     fi
 
     if [[ -n "$PARITY2_DISK" ]]; then
-        local parity2_uuid=$(blkid -s UUID -o value "$PARITY2_DISK")
+        local parity2_resolved
+        parity2_resolved=$(resolve_partition "$PARITY2_DISK")
+        local parity2_uuid
+        parity2_uuid=$(blkid -s UUID -o value "$parity2_resolved" 2>/dev/null || true)
         if [[ -n "$parity2_uuid" ]]; then
             fstab_entries+="UUID=$parity2_uuid $PARITY2_MOUNT ext4 defaults,nofail 0 2\n"
+        else
+            log_warning "No UUID found for $PARITY2_DISK (or its partitions), skipping fstab entry"
         fi
     fi
 
@@ -370,7 +414,7 @@ create_snapraid_config() {
     for i in "${!MOUNT_POINTS[@]}"; do
         if [[ $content_count -lt $SNAPRAID_CONTENT_FILES ]]; then
             config+="content ${MOUNT_POINTS[$i]}/.snapraid.content\n"
-            ((content_count++))
+            content_count=$((content_count + 1))
         fi
     done
     config+="\n"
