@@ -449,48 +449,166 @@ All drives should show `OK` status. Investigate any `WARNING` or `FAIL` results 
 
 ## 7. Configuring Immich
 
-### Set Library Path in docker-compose.yml
+### Storage Layout Overview
 
-```yaml
-services:
-  immich-server:
-    volumes:
-      - /mnt/storage/immich-library:/usr/src/app/upload
-      # ... other volumes
-  immich-microservices:
-    volumes:
-      - /mnt/storage/immich-library:/usr/src/app/upload
-      # ... other volumes
-```
+Immich has two distinct storage needs that should live on **different devices**:
+
+| Component | Where to Store | Why |
+|-----------|---------------|-----|
+| Photo/video library | `/mnt/storage` (mergerfs pool) | Bulk media — benefits from large capacity and parity protection |
+| PostgreSQL database | OS SSD (e.g., `/var/lib/docker/volumes/` or a path on `/`) | Small (1-3 GB) but needs fast random I/O for search, timeline, and metadata queries |
+| ML model cache | OS SSD (Docker named volume) | 2-5 GB, read-heavy, benefits from SSD speed |
+| Redis cache | OS SSD (Docker named volume) | Tiny, ephemeral, needs low latency |
+
+**Do NOT put the PostgreSQL database on the mergerfs pool.** The database performs many small random reads/writes that will be slow on spinning disks behind a FUSE filesystem. It also doesn't benefit from snapraid parity since it should be backed up with `pg_dump` instead.
 
 ### Create the Library Directory
 
 ```bash
-# Create Immich library directory
 sudo mkdir -p /mnt/storage/immich-library
-
-# Set ownership (use Immich's actual UID:GID)
 sudo chown -R 1000:1000 /mnt/storage/immich-library
 sudo chmod 755 /mnt/storage/immich-library
 ```
 
-### Apply and Restart
+### Docker Compose Configuration
+
+Below is the recommended volume configuration. The key point: **media goes to the mergerfs pool, everything else stays on the SSD.**
+
+```yaml
+services:
+  immich-server:
+    container_name: immich-server
+    image: ghcr.io/immich-app/immich-server:release
+    volumes:
+      # Media library → mergerfs pool (large, parity-protected)
+      - /mnt/storage/immich-library:/usr/src/app/upload
+      # Timezone
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - DB_HOSTNAME=immich-postgres
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DATABASE_NAME=immich
+      - REDIS_HOSTNAME=immich-redis
+    depends_on:
+      - immich-redis
+      - immich-postgres
+    restart: always
+
+  immich-machine-learning:
+    container_name: immich-machine-learning
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    volumes:
+      # ML model cache → SSD (Docker named volume, stays on OS disk)
+      - model-cache:/cache
+    restart: always
+
+  immich-redis:
+    container_name: immich-redis
+    image: docker.io/redis:6.2-alpine
+    volumes:
+      # Redis data → SSD
+      - immich-redis:/data
+    restart: always
+    healthcheck:
+      test: redis-cli ping || exit 1
+
+  immich-postgres:
+    container_name: immich-postgres
+    image: docker.io/tensorchord/pgvecto-rs:pg14-v0.2.0
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: postgres
+      POSTGRES_DB: immich
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      # Database → SSD (critical for performance)
+      - ${DB_DATA_LOCATION:-./postgres}:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: pg_isready --dbname='immich' --username='postgres' || exit 1;
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  model-cache:
+  immich-redis:
+```
+
+### Environment File (.env)
+
+Create a `.env` file next to your `docker-compose.yml`:
 
 ```bash
-docker-compose down
-docker-compose up -d
+# Database password — change this to something secure
+DB_PASSWORD=your-secure-password-here
 
-# Confirm Immich can write to the pool
+# Database location — keep on SSD, NOT on /mnt/storage
+DB_DATA_LOCATION=/opt/immich/postgres
+```
+
+Create the database directory on the SSD:
+
+```bash
+sudo mkdir -p /opt/immich/postgres
+```
+
+### Start Immich
+
+```bash
+docker compose up -d
+
+# Verify all containers are running
+docker compose ps
+
+# Check that immich-server can access the library
 docker exec immich-server ls /usr/src/app/upload
 ```
 
 ### Verify Uploads Land on the Pool
 
-After uploading a photo through Immich, confirm it appears on the storage pool:
+After uploading a photo through Immich:
 
 ```bash
-# Look for recently created files on the pool
-find /mnt/storage/immich-library -newer /tmp -type f | head -5
+# Check files appear on the mergerfs pool
+find /mnt/storage/immich-library -type f -name "*.jpg" | head -5
+
+# Confirm the file is physically on one of the data drives
+ls /mnt/disk1/immich-library/ /mnt/disk2/immich-library/ 2>/dev/null
+```
+
+### Database Backup
+
+Since the database is on the SSD (not protected by snapraid), set up regular backups:
+
+```bash
+# One-time backup
+docker exec immich-postgres pg_dumpall -U postgres > /mnt/storage/immich-db-backup.sql
+
+# Automated daily backup (add to crontab)
+sudo crontab -e
+# Add this line:
+0 1 * * * docker exec immich-postgres pg_dumpall -U postgres > /mnt/storage/backups/immich-db-$(date +\%Y\%m\%d).sql 2>/dev/null
+```
+
+This stores the database dump on the mergerfs pool where it gets snapraid parity protection.
+
+### Permissions Troubleshooting
+
+If Immich can't write to the library:
+
+```bash
+# Check Immich's UID/GID inside the container
+docker exec immich-server id
+# Typically: uid=1000 gid=1000
+
+# Ensure the library directory matches
+sudo chown -R 1000:1000 /mnt/storage/immich-library
+
+# Verify mergerfs allows access
+sudo mount | grep mergerfs
+# Should include 'allow_other' in the options
 ```
 
 ---
