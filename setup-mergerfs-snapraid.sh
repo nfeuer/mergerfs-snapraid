@@ -330,8 +330,14 @@ setup_fstab() {
     fstab_entries+="$source_mounts $MOUNT_POINT fuse.mergerfs defaults,allow_other,use_ino,cache.files=partial,dropcacheonclose=true,category.create=mfs,moveonenospc=true,minfreespace=50G,fsname=mergerfs 0 0\n"
 
     if [[ "$DRY_RUN" == false ]]; then
-        echo -e "\n# mergerfs + SnapRAID configuration" >> /etc/fstab
-        echo -e "$fstab_entries" >> /etc/fstab
+        if grep -q "mergerfs + SnapRAID configuration" /etc/fstab; then
+            log_warning "Existing mergerfs + SnapRAID entries found in /etc/fstab"
+            log_warning "Skipping fstab modification to avoid duplicates"
+            log_warning "Please review /etc/fstab manually if you need to update it"
+        else
+            echo -e "\n# mergerfs + SnapRAID configuration" >> /etc/fstab
+            echo -e "$fstab_entries" >> /etc/fstab
+        fi
     else
         log_info "Would add to /etc/fstab:"
         echo -e "$fstab_entries"
