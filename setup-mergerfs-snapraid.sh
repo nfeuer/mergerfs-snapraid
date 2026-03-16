@@ -285,7 +285,7 @@ install_packages() {
 
     if [[ "$DRY_RUN" == false ]]; then
         apt-get update
-        apt-get install -y mergerfs snapraid smartmontools mail-utils
+        apt-get install -y mergerfs snapraid smartmontools mailutils
     fi
 
     log_success "Packages installed"
